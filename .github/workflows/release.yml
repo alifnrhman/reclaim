@@ -102,6 +102,10 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Install npm with staged publishing support
+        shell: bash
+        run: npm install --global npm@11.21.0
       - name: Verify release version
         shell: bash
         run: test "v$(node -p "require('./npm/package.json').version")" = "$GITHUB_REF_NAME"
@@ -115,7 +119,7 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
           fi
-      - name: Publish npm package
+      - name: Stage npm package
         working-directory: npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -124,6 +128,6 @@ jobs:
           if npm view "$(node -p "require('./package.json').name")@$(node -p "require('./package.json').version")" version >/dev/null 2>&1; then
             echo "npm package version already exists; skipping publish"
           else
-            npm publish --access public --provenance
+            npm stage publish --access public --provenance
           fi
 
