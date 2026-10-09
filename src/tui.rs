@@ -134,6 +134,7 @@ impl App {
 }
 
 #[derive(Debug)]
+#[cfg_attr(not(unix), allow(dead_code))]
 enum Key {
     Up,
     Down,

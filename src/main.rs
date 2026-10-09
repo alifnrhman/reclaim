@@ -61,12 +61,13 @@ fn parse_args() -> Result<Cli> {
             Some("--no-docker") => no_docker = true,
             Some("-h" | "--help") => {
                 println!(
-                    "reclaim 0.1.0\n\nUSAGE:\n    reclaim [--no-global] [--no-docker] <PATH>...\n\nScans explicit project paths, then user development caches and Docker build cache.\nDeletion is permanent and requires typed confirmation."
+                    "reclaim {}\n\nUSAGE:\n    reclaim [--no-global] [--no-docker] <PATH>...\n\nScans explicit project paths, then user development caches and Docker build cache.\nDeletion is permanent and requires a second confirmation keypress.",
+                    env!("CARGO_PKG_VERSION")
                 );
                 std::process::exit(0);
             }
             Some("-V" | "--version") => {
-                println!("reclaim 0.1.0");
+                println!("reclaim {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
             Some(value) if value.starts_with('-') => bail!("unknown option: {value}"),

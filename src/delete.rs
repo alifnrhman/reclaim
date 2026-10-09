@@ -114,9 +114,12 @@ fn safe_remove(path: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(windows)]
+#[allow(clippy::permissions_set_readonly_false)]
 fn clear_readonly(path: &Path, metadata: &fs::Metadata) -> std::io::Result<()> {
     let mut permissions = metadata.permissions();
     if permissions.readonly() {
+        // On Windows this toggles the FILE_ATTRIBUTE_READONLY flag; it does
+        // not broaden Unix mode bits because this function is Windows-only.
         permissions.set_readonly(false);
         fs::set_permissions(path, permissions)?;
     }
