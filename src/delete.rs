@@ -1,7 +1,7 @@
 use crate::docker;
 use crate::model::{Candidate, Risk, Source};
 use crate::rules;
-use crate::scanner::{fingerprint, is_link_like};
+use crate::scanner::{fingerprint, is_link_like, tree_size};
 use std::fs;
 use std::path::Path;
 
@@ -71,6 +71,15 @@ fn validate_and_delete(candidate: &Candidate) -> Result<String, String> {
         {
             return Err("candidate changed after the scan; refresh before deleting".into());
         }
+    }
+    let (current_bytes, current_files, warnings) = tree_size(path);
+    if let Some(warning) = warnings.first() {
+        return Err(format!(
+            "candidate could not be fully revalidated; refresh before deleting: {warning}"
+        ));
+    }
+    if current_bytes != candidate.bytes || current_files != candidate.files {
+        return Err("candidate contents changed after the scan; refresh before deleting".into());
     }
     if candidate.source == Source::Project {
         let rule = rules::classify(&canonical, &canonical_scope)
