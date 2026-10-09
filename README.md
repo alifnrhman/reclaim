@@ -48,8 +48,8 @@ The release also includes `reclaim-windows-x86_64.sha256`. Verify the download w
 Pushing a version tag builds native Linux and Windows binaries, runs the tests on each platform, packages them, generates SHA-256 checksums, publishes a GitHub Release, and publishes `@alifnrhman/reclaim` to npm:
 
 ```sh
-git tag v0.1.2
-git push origin v0.1.2
+git tag v0.1.3
+git push origin v0.1.3
 ```
 
 The UI starts with nothing selected and sorts by allocated size. Use the arrow keys or `j`/`k` to move, Space to select, `a` to select every `Safe` item, `n` to clear selection, `f` to cycle filters, and `s` to change sorting. Press `d`, then `d` again or Enter to confirm permanent deletion; Esc cancels. Windows consoles use the same compact UI with commands submitted using Enter.

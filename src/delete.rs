@@ -136,7 +136,10 @@ mod tests {
     use super::*;
     use crate::scanner;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
 
     struct TestDir(PathBuf);
 
@@ -146,11 +149,12 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
+            let sequence = NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
-                "reclaim-delete-test-{}-{nonce}",
-                std::process::id()
+                "reclaim-delete-test-{}-{nonce}-{sequence}",
+                std::process::id(),
             ));
-            fs::create_dir_all(&path).unwrap();
+            fs::create_dir(&path).unwrap();
             Self(path)
         }
     }
