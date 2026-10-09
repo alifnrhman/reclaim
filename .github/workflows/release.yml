@@ -1,0 +1,129 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: release-linux-x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: release-windows-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo test --locked --target ${{ matrix.target }}
+      - run: cargo build --locked --release --target ${{ matrix.target }}
+
+      - name: Package Linux binary
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          tar -C target/${{ matrix.target }}/release -czf reclaim-linux-x86_64.tar.gz reclaim
+          sha256sum reclaim-linux-x86_64.tar.gz > reclaim-linux-x86_64.sha256
+
+      - name: Package Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "target/${{ matrix.target }}/release/reclaim.exe" -DestinationPath "reclaim-windows-x86_64.zip"
+          $hash = (Get-FileHash "reclaim-windows-x86_64.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  reclaim-windows-x86_64.zip" | Out-File "reclaim-windows-x86_64.sha256" -Encoding ascii
+
+      - name: Stage npm Linux binary
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p npm-payload/linux-x64
+          install -m 755 target/${{ matrix.target }}/release/reclaim npm-payload/linux-x64/reclaim
+
+      - name: Stage npm Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "npm-payload/win32-x64"
+          Copy-Item "target/${{ matrix.target }}/release/reclaim.exe" "npm-payload/win32-x64/reclaim.exe"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            reclaim-*.tar.gz
+            reclaim-*.zip
+            reclaim-*.sha256
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-binary-${{ matrix.target }}
+          path: npm-payload
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: npm-binary-*
+          path: npm/vendor
+          merge-multiple: true
+      - name: Prepare npm package
+        shell: bash
+        run: |
+          chmod +x npm/vendor/linux-x64/reclaim
+          test -f npm/vendor/win32-x64/reclaim.exe
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Verify release version
+        shell: bash
+        run: test "v$(node -p "require('./npm/package.json').version")" = "$GITHUB_REF_NAME"
+      - name: Create release and upload binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
+          fi
+      - name: Publish npm package
+        working-directory: npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          if npm view "$(node -p "require('./package.json').name")@$(node -p "require('./package.json').version")" version >/dev/null 2>&1; then
+            echo "npm package version already exists; skipping publish"
+          else
+            npm publish --access public --provenance
+          fi
+

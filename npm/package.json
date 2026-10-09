@@ -1,0 +1,38 @@
+{
+  "name": "@alifnrhman/reclaim",
+  "version": "0.1.0",
+  "description": "Safely find and remove regenerable development artifacts",
+  "license": "MIT",
+  "author": "alifnrhman",
+  "homepage": "https://github.com/alifnrhman/reclaim#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alifnrhman/reclaim.git"
+  },
+  "bugs": {
+    "url": "https://github.com/alifnrhman/reclaim/issues"
+  },
+  "type": "commonjs",
+  "bin": {
+    "reclaim": "bin/reclaim.js"
+  },
+  "files": [
+    "bin",
+    "vendor",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}
+

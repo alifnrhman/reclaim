@@ -1,0 +1,20 @@
+[package]
+name = "reclaim"
+version = "0.1.0"
+edition = "2024"
+description = "Safely find and remove regenerable development artifacts"
+license = "MIT"
+repository = "https://github.com/alifnrhman/reclaim"
+homepage = "https://github.com/alifnrhman/reclaim"
+
+[dependencies]
+anyhow = "1.0"
+dirs = "6.0"
+libc = "0.2"
+serde_json = "1.0"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
