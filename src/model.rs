@@ -25,6 +25,19 @@ pub enum Source {
     Docker,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DockerResource {
+    BuildCache,
+    ComposeVolume {
+        name: String,
+        project: String,
+        logical_name: String,
+    },
+    Volume {
+        name: String,
+    },
+}
+
 impl Source {
     pub fn label(&self) -> &'static str {
         match self {
@@ -48,6 +61,7 @@ pub struct Candidate {
     pub path: Option<PathBuf>,
     pub scope_root: Option<PathBuf>,
     pub source: Source,
+    pub docker_resource: Option<DockerResource>,
     pub rule_id: &'static str,
     pub category: &'static str,
     pub bytes: u64,
@@ -61,6 +75,17 @@ pub struct Candidate {
 
 impl Candidate {
     pub fn display_path(&self) -> String {
+        if let Some(DockerResource::ComposeVolume {
+            project,
+            logical_name,
+            ..
+        }) = &self.docker_resource
+        {
+            return format!("{project} / {logical_name}");
+        }
+        if let Some(DockerResource::Volume { name }) = &self.docker_resource {
+            return name.clone();
+        }
         self.path
             .as_ref()
             .map(|p| p.display().to_string())

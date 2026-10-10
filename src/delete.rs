@@ -38,7 +38,7 @@ pub fn delete_selected_with_progress(
 
 fn delete_one(candidate: &Candidate) -> DeleteReport {
     let result = match candidate.source {
-        Source::Docker => docker::prune_build_cache(),
+        Source::Docker => docker::delete(candidate),
         Source::Project | Source::Global => validate_and_delete(candidate),
     };
     DeleteReport {

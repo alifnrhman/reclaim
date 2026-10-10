@@ -59,6 +59,7 @@ pub fn scan_projects(paths: &[PathBuf]) -> Result<ScanResult> {
                     path: Some(item.path),
                     scope_root: Some(item.root),
                     source: Source::Project,
+                    docker_resource: None,
                     rule_id: item.rule.id,
                     category: item.rule.category,
                     bytes,
@@ -305,6 +306,53 @@ mod tests {
                 .iter()
                 .any(|c| c.rule_id == "generic-output" && c.risk == Risk::Review)
         );
+    }
+
+    #[test]
+    fn recognizes_locked_node_outputs_without_trusting_every_dist() {
+        let temp = TestDir::new("node-outputs");
+        fs::write(
+            temp.0.join("package.json"),
+            r#"{"scripts":{"build":"vite build"}}"#,
+        )
+        .unwrap();
+        fs::write(temp.0.join("bun.lock"), "").unwrap();
+        for directory in ["dist", "coverage", ".nyc_output"] {
+            fs::create_dir(temp.0.join(directory)).unwrap();
+        }
+        fs::write(temp.0.join(".eslintcache"), "generated").unwrap();
+
+        let scan = scan_projects(std::slice::from_ref(&temp.0)).unwrap();
+        assert_eq!(scan.candidates.len(), 4);
+        assert!(scan.candidates.iter().all(|c| c.risk == Risk::Safe));
+        assert!(scan.candidates.iter().any(|c| c.rule_id == "node-dist"));
+
+        fs::remove_file(temp.0.join("bun.lock")).unwrap();
+        let scan = scan_projects(std::slice::from_ref(&temp.0)).unwrap();
+        assert!(
+            scan.candidates
+                .iter()
+                .any(|c| c.rule_id == "generic-output" && c.risk == Risk::Review)
+        );
+        assert!(
+            scan.candidates
+                .iter()
+                .filter(|c| c.rule_id == "node-tool-cache")
+                .all(|c| c.risk == Risk::Review)
+        );
+    }
+
+    #[test]
+    fn recognizes_nuxt_output_as_one_safe_candidate() {
+        let temp = TestDir::new("nuxt-output");
+        fs::write(temp.0.join("nuxt.config.ts"), "export default {};").unwrap();
+        fs::create_dir(temp.0.join(".output")).unwrap();
+        fs::create_dir_all(temp.0.join(".output/server/node_modules")).unwrap();
+
+        let scan = scan_projects(std::slice::from_ref(&temp.0)).unwrap();
+        assert_eq!(scan.candidates.len(), 1);
+        assert_eq!(scan.candidates[0].rule_id, "nuxt-output");
+        assert_eq!(scan.candidates[0].risk, Risk::Safe);
     }
 
     #[cfg(unix)]

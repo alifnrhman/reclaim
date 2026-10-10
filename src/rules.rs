@@ -1,4 +1,6 @@
 use crate::model::Risk;
+use serde_json::Value;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
@@ -40,6 +42,48 @@ fn package_manager(dir: &Path) -> (&'static str, bool) {
             false,
         )
     }
+}
+
+fn has_node_lock(path: &Path, root: &Path) -> bool {
+    ancestors_to(path, root).any(|dir| package_manager(&dir).1)
+}
+
+fn package_json(path: &Path) -> Option<Value> {
+    serde_json::from_slice(&fs::read(path.join("package.json")).ok()?).ok()
+}
+
+fn has_package_script(dir: &Path, script: &str) -> bool {
+    package_json(dir)
+        .and_then(|value| {
+            value
+                .get("scripts")?
+                .get(script)?
+                .as_str()
+                .map(str::to_owned)
+        })
+        .is_some_and(|command| !command.trim().is_empty())
+}
+
+fn has_package(dir: &Path, package: &str) -> bool {
+    package_json(dir).is_some_and(|value| {
+        ["dependencies", "devDependencies", "optionalDependencies"]
+            .iter()
+            .any(|section| value.get(section).and_then(|v| v.get(package)).is_some())
+    })
+}
+
+fn nuxt_project(path: &Path, root: &Path) -> Option<PathBuf> {
+    ancestors_to(path, root).find(|dir| {
+        has_any(
+            dir,
+            &[
+                "nuxt.config.js",
+                "nuxt.config.ts",
+                "nuxt.config.mjs",
+                "nuxt.config.cjs",
+            ],
+        ) || has_package(dir, "nuxt")
+    })
 }
 
 pub fn classify(path: &Path, root: &Path) -> Option<RuleMatch> {
@@ -137,19 +181,20 @@ pub fn classify(path: &Path, root: &Path) -> Option<RuleMatch> {
             "run the project's Next.js build or dev command",
         );
     }
-    if name == ".nuxt"
-        && project_dir(
-            path,
-            root,
-            &["nuxt.config.js", "nuxt.config.ts", "package.json"],
-        )
-        .is_some()
-    {
+    if name == ".nuxt" && nuxt_project(path, root).is_some() {
         return generated(
             "nuxt-cache",
             "framework cache",
             "Nuxt output is generated",
             "run the project's Nuxt build or dev command",
+        );
+    }
+    if name == ".output" && nuxt_project(path, root).is_some() {
+        return generated(
+            "nuxt-output",
+            "build",
+            "Nuxt/Nitro output is generated",
+            "run the project's Nuxt build command",
         );
     }
     if name == ".turbo" && project_dir(path, root, &["turbo.json", "package.json"]).is_some() {
@@ -166,6 +211,36 @@ pub fn classify(path: &Path, root: &Path) -> Option<RuleMatch> {
             "framework cache",
             "Vite dependency cache is generated",
             "rerun the Vite dev server or build",
+        );
+    }
+
+    if matches!(name, "coverage" | ".nyc_output" | ".eslintcache")
+        && project_dir(path, root, &["package.json"]).is_some()
+    {
+        let locked = has_node_lock(path, root);
+        return Some(RuleMatch {
+            id: "node-tool-cache",
+            category: "test/lint cache",
+            risk: if locked { Risk::Safe } else { Risk::Review },
+            reason: if locked {
+                "Generated Node.js test or lint output in a locked project".into()
+            } else {
+                "Generated-looking Node.js output, but no recognized lockfile was found".into()
+            },
+            restore: "rerun the project's lint or test command".into(),
+        });
+    }
+
+    if name == "dist"
+        && let Some(dir) = project_dir(path, root, &["package.json"])
+        && has_node_lock(path, root)
+        && has_package_script(&dir, "build")
+    {
+        return generated(
+            "node-dist",
+            "build",
+            "Node.js dist output is backed by a build script and lockfile",
+            "run the project's build script",
         );
     }
 

@@ -69,6 +69,7 @@ pub fn scan() -> (Vec<Candidate>, ScanWarnings) {
                 path: Some(path.clone()),
                 scope_root: Some(path),
                 source: Source::Global,
+                docker_resource: None,
                 rule_id: spec.rule_id,
                 category: spec.category,
                 bytes: 0,
@@ -88,6 +89,7 @@ pub fn scan() -> (Vec<Candidate>, ScanWarnings) {
             path: Some(path.clone()),
             scope_root: Some(path),
             source: Source::Global,
+            docker_resource: None,
             rule_id: spec.rule_id,
             category: spec.category,
             bytes,
@@ -144,6 +146,12 @@ fn fallback_specs(home: &Path) -> Vec<CacheSpec> {
             home.join(".cargo/registry"),
             "cargo-registry",
             "Cargo's downloaded registry data",
+            "cargo fetch or cargo build",
+        ),
+        safe(
+            home.join(".cargo/git"),
+            "cargo-git-cache",
+            "Cargo's cached Git dependency repositories and checkouts",
             "cargo fetch or cargo build",
         ),
         safe(

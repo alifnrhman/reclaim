@@ -18,7 +18,7 @@ cargo build --release
 ./target/release/reclaim
 ```
 
-The default scan also checks development caches owned by the current user and Docker build cache. Disable either source when needed:
+The default scan also checks development caches owned by the current user, Docker build cache, and Docker Compose volumes. Disable either source when needed:
 
 ```sh
 reclaim --no-global --no-docker ~/Projects/project-a ~/Projects/project-b
@@ -54,8 +54,8 @@ The release also includes `reclaim-windows-x86_64.sha256`. Verify the download w
 Pushing a version tag builds native Linux and Windows binaries, runs the tests on each platform, packages them, generates SHA-256 checksums, publishes a GitHub Release, and publishes `@alifnrhman/reclaim` to npm:
 
 ```sh
-git tag v0.1.6
-git push origin v0.1.6
+git tag v0.1.7
+git push origin v0.1.7
 ```
 
 The UI starts with nothing selected and sorts by allocated size. Use the arrow keys or `j`/`k` to move, Space to select, `a` to select every `Safe` item, `n` to clear selection, `f` to cycle filters, and `s` to change sorting. Press `d`, then `d` again or Enter to confirm permanent deletion; Esc cancels. Windows consoles use the same compact UI with commands submitted using Enter.
@@ -66,4 +66,6 @@ The UI starts with nothing selected and sorts by allocated size. Use the arrow k
 - **Review**: a conventional artifact name whose regeneration evidence is incomplete or whose contents may be a deliverable.
 - **Protected**: a symlink, reparse point, filesystem boundary, or otherwise forbidden target. It cannot be selected.
 
-The scanner never follows symlinks or Windows reparse points, stays on the root filesystem, ignores VCS metadata, rejects filesystem roots, deduplicates hardlinks, and revalidates every path immediately before deletion. Docker cleanup is limited to `docker builder prune --force`; images, containers, networks, and volumes are never removed.
+The scanner never follows symlinks or Windows reparse points, stays on the root filesystem, ignores VCS metadata, rejects filesystem roots, deduplicates hardlinks, and revalidates every path immediately before deletion.
+
+Docker build cache is safe and regenerable. Named volumes are listed per Compose project and logical volume, but only Compose-labeled volumes with zero container references can be selected, and they are always marked **Review** because their data cannot be regenerated automatically. Volume identity and references are checked again immediately before an exact `docker volume rm`; anonymous volumes and volumes referenced by running or stopped containers remain protected. Images, containers, and networks are never removed.

@@ -85,7 +85,7 @@ fn parse_args() -> Result<Command> {
             Some("--no-docker") => no_docker = true,
             Some("-h" | "--help") => {
                 println!(
-                    "reclaim {}\n\nUSAGE:\n    reclaim [--no-global] [--no-docker] [PATH]...\n    reclaim update\n\nScans the current directory when PATH is omitted, then user development caches and Docker build cache.\nDeletion is permanent and requires a second confirmation keypress.",
+                    "reclaim {}\n\nUSAGE:\n    reclaim [--no-global] [--no-docker] [PATH]...\n    reclaim update\n\nScans the current directory when PATH is omitted, then user development caches, Docker build cache, and Docker Compose volumes.\nDeletion is permanent and requires a second confirmation keypress.",
                     env!("CARGO_PKG_VERSION")
                 );
                 std::process::exit(0);

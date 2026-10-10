@@ -19,10 +19,14 @@ pub fn parse_human_bytes(input: &str) -> Option<u64> {
     let unit = clean[split..].to_ascii_lowercase();
     let multiplier = match unit.as_str() {
         "b" => 1_f64,
-        "kb" | "kib" => 1024_f64,
-        "mb" | "mib" => 1024_f64.powi(2),
-        "gb" | "gib" => 1024_f64.powi(3),
-        "tb" | "tib" => 1024_f64.powi(4),
+        "kb" => 1_000_f64,
+        "mb" => 1_000_f64.powi(2),
+        "gb" => 1_000_f64.powi(3),
+        "tb" => 1_000_f64.powi(4),
+        "kib" => 1024_f64,
+        "mib" => 1024_f64.powi(2),
+        "gib" => 1024_f64.powi(3),
+        "tib" => 1024_f64.powi(4),
         _ => return None,
     };
     Some((number * multiplier) as u64)
@@ -34,7 +38,8 @@ mod tests {
 
     #[test]
     fn parses_docker_sizes() {
-        assert_eq!(parse_human_bytes("1.5GB (40%)"), Some(1_610_612_736));
+        assert_eq!(parse_human_bytes("1.5GB (40%)"), Some(1_500_000_000));
+        assert_eq!(parse_human_bytes("1.5GiB"), Some(1_610_612_736));
         assert_eq!(parse_human_bytes("0B"), Some(0));
     }
 }
