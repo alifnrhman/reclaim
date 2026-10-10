@@ -12,6 +12,24 @@ const supported = new Map([
 const platform = `${process.platform}-${process.arch}`;
 const target = supported.get(platform);
 
+if (process.argv.length === 3 && process.argv[2] === "update") {
+  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+  const child = spawnSync(
+    npm,
+    ["install", "--global", "@alifnrhman/reclaim@latest"],
+    {
+      stdio: "inherit",
+      windowsHide: false,
+      shell: process.platform === "win32",
+    },
+  );
+  if (child.error) {
+    console.error(`failed to start npm: ${child.error.message}`);
+    process.exit(1);
+  }
+  process.exit(child.status ?? 1);
+}
+
 if (!target && !process.env.RECLAIM_BINARY) {
   console.error(
     `reclaim does not yet provide a binary for ${platform}. Supported platforms: Linux x64 and Windows x64.`,

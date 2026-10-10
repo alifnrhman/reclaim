@@ -1,8 +1,10 @@
 use anyhow::{Context, Result, bail};
 use reclaim::model::Candidate;
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[derive(Debug)]
 struct Cli {
@@ -11,12 +13,20 @@ struct Cli {
     no_docker: bool,
 }
 
+enum Command {
+    Scan(Cli),
+    Update,
+}
+
 fn main() -> Result<()> {
-    let cli = parse_args()?;
+    let Command::Scan(cli) = parse_args()? else {
+        return reclaim::update::install_latest();
+    };
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         bail!("reclaim requires an interactive terminal");
     }
 
+    let update_check = reclaim::update::check_async();
     scan_status("projects")?;
     let project = reclaim::scanner::scan_projects(&cli.paths)?;
     let mut candidates = project.candidates;
@@ -42,7 +52,17 @@ fn main() -> Result<()> {
     }
     eprint!("\r\x1b[2K");
     std::io::stderr().flush()?;
-    reclaim::tui::run(candidates, warnings).context("terminal UI failed")
+    let update_notice = update_check
+        .recv_timeout(Duration::from_millis(250))
+        .ok()
+        .flatten()
+        .map(|version| {
+            format!(
+                "Update available: {} → {version} · run `reclaim update`",
+                env!("CARGO_PKG_VERSION")
+            )
+        });
+    reclaim::tui::run(candidates, warnings, update_notice).context("terminal UI failed")
 }
 
 fn scan_status(source: &str) -> Result<()> {
@@ -51,17 +71,21 @@ fn scan_status(source: &str) -> Result<()> {
     Ok(())
 }
 
-fn parse_args() -> Result<Cli> {
+fn parse_args() -> Result<Command> {
+    let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if arguments.len() == 1 && arguments[0] == "update" {
+        return Ok(Command::Update);
+    }
     let mut paths = Vec::new();
     let mut no_global = false;
     let mut no_docker = false;
-    for argument in std::env::args_os().skip(1) {
+    for argument in arguments {
         match argument.to_str() {
             Some("--no-global") => no_global = true,
             Some("--no-docker") => no_docker = true,
             Some("-h" | "--help") => {
                 println!(
-                    "reclaim {}\n\nUSAGE:\n    reclaim [--no-global] [--no-docker] <PATH>...\n\nScans explicit project paths, then user development caches and Docker build cache.\nDeletion is permanent and requires a second confirmation keypress.",
+                    "reclaim {}\n\nUSAGE:\n    reclaim [--no-global] [--no-docker] [PATH]...\n    reclaim update\n\nScans the current directory when PATH is omitted, then user development caches and Docker build cache.\nDeletion is permanent and requires a second confirmation keypress.",
                     env!("CARGO_PKG_VERSION")
                 );
                 std::process::exit(0);
@@ -75,13 +99,13 @@ fn parse_args() -> Result<Cli> {
         }
     }
     if paths.is_empty() {
-        bail!("at least one scan PATH is required; run reclaim --help");
+        paths.push(std::env::current_dir().context("cannot determine the current directory")?);
     }
-    Ok(Cli {
+    Ok(Command::Scan(Cli {
         paths,
         no_global,
         no_docker,
-    })
+    }))
 }
 
 fn deduplicate(candidates: Vec<Candidate>) -> Vec<Candidate> {

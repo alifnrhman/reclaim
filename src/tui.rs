@@ -169,7 +169,11 @@ enum Key {
     Unknown,
 }
 
-pub fn run(candidates: Vec<Candidate>, warnings: ScanWarnings) -> Result<()> {
+pub fn run(
+    candidates: Vec<Candidate>,
+    warnings: ScanWarnings,
+    startup_message: Option<String>,
+) -> Result<()> {
     let _terminal = TerminalSession::enter()?;
     let mut app = App {
         candidates,
@@ -177,7 +181,7 @@ pub fn run(candidates: Vec<Candidate>, warnings: ScanWarnings) -> Result<()> {
         scroll: 0,
         filter: Filter::All,
         descending: true,
-        message: String::new(),
+        message: startup_message.unwrap_or_default(),
         warnings,
         confirm: false,
         deleting: None,
