@@ -1,6 +1,6 @@
 {
   "name": "@alifnrhman/reclaim",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Safely find and remove regenerable development artifacts",
   "license": "MIT",
   "author": "alifnrhman",

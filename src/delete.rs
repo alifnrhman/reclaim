@@ -14,10 +14,25 @@ pub struct DeleteReport {
 }
 
 pub fn delete_selected(candidates: &[Candidate]) -> Vec<DeleteReport> {
-    candidates
+    delete_selected_with_progress(candidates, |_, _, _| {})
+}
+
+pub fn delete_selected_with_progress(
+    candidates: &[Candidate],
+    mut on_progress: impl FnMut(usize, usize, &Candidate),
+) -> Vec<DeleteReport> {
+    let selected: Vec<_> = candidates
         .iter()
         .filter(|candidate| candidate.selected && candidate.risk != Risk::Protected)
-        .map(delete_one)
+        .collect();
+    let total = selected.len();
+    selected
+        .into_iter()
+        .enumerate()
+        .map(|(index, candidate)| {
+            on_progress(index + 1, total, candidate);
+            delete_one(candidate)
+        })
         .collect()
 }
 

@@ -4,6 +4,8 @@ use crate::model::{Candidate, Risk, ScanWarnings};
 use anyhow::Result;
 use std::collections::HashSet;
 use std::io::{self, Write};
+use std::sync::mpsc;
+use std::time::Duration;
 
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
@@ -24,6 +26,24 @@ struct App {
     message: String,
     warnings: ScanWarnings,
     confirm: bool,
+    deleting: Option<DeleteProgress>,
+}
+
+#[derive(Debug)]
+struct DeleteProgress {
+    frame: usize,
+    current: usize,
+    total: usize,
+    path: String,
+}
+
+enum DeleteEvent {
+    Started {
+        current: usize,
+        total: usize,
+        path: String,
+    },
+    Done(Vec<delete::DeleteReport>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -160,13 +180,14 @@ pub fn run(candidates: Vec<Candidate>, warnings: ScanWarnings) -> Result<()> {
         message: String::new(),
         warnings,
         confirm: false,
+        deleting: None,
     };
 
     loop {
         draw(&app)?;
         let key = read_key()?;
         if app.confirm {
-            handle_confirmation(&mut app, key);
+            handle_confirmation(&mut app, key)?;
             continue;
         }
         match key {
@@ -243,25 +264,90 @@ fn begin_delete(app: &mut App) {
     }
 }
 
-fn handle_confirmation(app: &mut App, key: Key) {
+fn handle_confirmation(app: &mut App, key: Key) -> Result<()> {
     match key {
         Key::Escape | Key::Char('q') => app.confirm = false,
-        Key::Char('d') | Key::Enter => finish_delete(app),
+        Key::Char('d') | Key::Enter => finish_delete(app)?,
         #[cfg(not(unix))]
         Key::Text(text) => {
             if matches!(text.trim().to_ascii_lowercase().as_str(), "" | "d") {
-                finish_delete(app);
+                finish_delete(app)?;
             } else if text.trim().eq_ignore_ascii_case("q") {
                 app.confirm = false;
             }
         }
         _ => {}
     }
+    Ok(())
 }
 
-fn finish_delete(app: &mut App) {
+fn finish_delete(app: &mut App) -> Result<()> {
     app.confirm = false;
-    let reports = delete::delete_selected(&app.candidates);
+    let selected: Vec<_> = app
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.selected && candidate.risk != Risk::Protected)
+        .cloned()
+        .collect();
+    app.deleting = Some(DeleteProgress {
+        frame: 0,
+        current: 0,
+        total: selected.len(),
+        path: "Preparing…".into(),
+    });
+    draw(app)?;
+
+    let reports = std::thread::scope(|scope| -> Result<Vec<delete::DeleteReport>> {
+        let (sender, receiver) = mpsc::channel();
+        let worker = scope.spawn(move || {
+            let reports =
+                delete::delete_selected_with_progress(&selected, |current, total, candidate| {
+                    let _ = sender.send(DeleteEvent::Started {
+                        current,
+                        total,
+                        path: candidate.display_path(),
+                    });
+                });
+            let _ = sender.send(DeleteEvent::Done(reports));
+        });
+
+        loop {
+            match receiver.recv_timeout(Duration::from_millis(100)) {
+                Ok(DeleteEvent::Started {
+                    current,
+                    total,
+                    path,
+                }) => {
+                    app.deleting = Some(DeleteProgress {
+                        frame: 0,
+                        current,
+                        total,
+                        path,
+                    });
+                    draw(app)?;
+                }
+                Ok(DeleteEvent::Done(reports)) => {
+                    worker
+                        .join()
+                        .map_err(|_| anyhow::anyhow!("deletion worker stopped unexpectedly"))?;
+                    break Ok(reports);
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if let Some(progress) = &mut app.deleting {
+                        progress.frame = progress.frame.wrapping_add(1);
+                    }
+                    draw(app)?;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    worker
+                        .join()
+                        .map_err(|_| anyhow::anyhow!("deletion worker stopped unexpectedly"))?;
+                    break Err(anyhow::anyhow!("deletion worker disconnected"));
+                }
+            }
+        }
+    })?;
+    app.deleting = None;
     let successful: HashSet<_> = reports
         .iter()
         .filter(|report| report.result.is_ok())
@@ -293,6 +379,7 @@ fn finish_delete(app: &mut App) {
         format!("{} removed · {}", successful.len(), failures.join(" · "))
     };
     app.clamp_cursor();
+    Ok(())
 }
 
 fn draw(app: &App) -> Result<()> {
@@ -362,7 +449,14 @@ fn draw(app: &App) -> Result<()> {
         ));
     }
 
-    if app.confirm {
+    if let Some(progress) = &app.deleting {
+        let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][progress.frame % 10];
+        let path = truncate(&progress.path, width.saturating_sub(8));
+        output.push_str(&format!(
+            "\n  {CYAN}{BOLD}{spinner} Deleting {}/{}{RESET}  {}\n  {DIM}Please wait. Do not close this terminal.{RESET}",
+            progress.current, progress.total, path
+        ));
+    } else if app.confirm {
         output.push_str(&format!(
             "\n  {RED}{BOLD}Permanently delete{RESET} {} item{} ({})\n  press {BOLD}d{RESET} again or {BOLD}Enter{RESET} to confirm · Esc to cancel",
             app.selected_count(),
