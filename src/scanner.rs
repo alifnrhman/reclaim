@@ -60,6 +60,7 @@ pub fn scan_projects(paths: &[PathBuf]) -> Result<ScanResult> {
                     scope_root: Some(item.root),
                     source: Source::Project,
                     docker_resource: None,
+                    external_program: None,
                     rule_id: item.rule.id,
                     category: item.rule.category,
                     bytes,

@@ -1,6 +1,8 @@
 use crate::format::parse_human_bytes;
 use crate::model::{Candidate, DockerResource, Risk, ScanWarnings, Source};
+use crate::process;
 use serde_json::Value;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 const COMPOSE_PROJECT_LABEL: &str = "com.docker.compose.project";
@@ -14,9 +16,13 @@ struct VolumeUsage {
     bytes: u64,
 }
 
-pub fn scan() -> (Vec<Candidate>, ScanWarnings) {
+pub fn scan(excluded_roots: &[PathBuf]) -> (Vec<Candidate>, ScanWarnings) {
     let mut warnings = ScanWarnings::default();
-    let output = match Command::new("docker")
+    let docker = match process::trusted_program("docker", excluded_roots) {
+        Ok(path) => path,
+        Err(_) => return (Vec::new(), warnings),
+    };
+    let output = match docker_command(&docker)
         .args(["system", "df", "--format", "{{json .}}"])
         .output()
     {
@@ -57,17 +63,18 @@ pub fn scan() -> (Vec<Candidate>, ScanWarnings) {
             candidates.push(protected_summary(
                 &kind,
                 parse_human_bytes(&size).unwrap_or(0),
+                &docker,
             ));
         }
     }
 
     let expected_volumes = volume_summary.map(|(count, _)| count).unwrap_or(0);
-    match scan_volumes(expected_volumes) {
+    match scan_volumes(expected_volumes, &docker) {
         Ok(volumes) => candidates.extend(volumes),
         Err(error) => {
             warnings.0.push(error);
             if let Some((_, bytes)) = volume_summary {
-                candidates.push(protected_summary("volumes", bytes));
+                candidates.push(protected_summary("volumes", bytes, &docker));
             }
         }
     }
@@ -79,6 +86,7 @@ pub fn scan() -> (Vec<Candidate>, ScanWarnings) {
             scope_root: None,
             source: Source::Docker,
             docker_resource: Some(DockerResource::BuildCache),
+            external_program: Some(docker.clone()),
             rule_id: "docker-build-cache",
             category: "build cache",
             bytes: build_bytes,
@@ -93,8 +101,8 @@ pub fn scan() -> (Vec<Candidate>, ScanWarnings) {
     (candidates, warnings)
 }
 
-fn scan_volumes(expected_count: usize) -> Result<Vec<Candidate>, String> {
-    let output = Command::new("docker")
+fn scan_volumes(expected_count: usize, docker: &Path) -> Result<Vec<Candidate>, String> {
+    let output = docker_command(docker)
         .args(["system", "df", "--verbose", "--format", VOLUME_FORMAT])
         .output()
         .map_err(|error| format!("Could not inspect Docker volume sizes: {error}"))?;
@@ -114,7 +122,7 @@ fn scan_volumes(expected_count: usize) -> Result<Vec<Candidate>, String> {
 
     let mut inspected = Vec::new();
     for chunk in usages.chunks(100) {
-        let mut command = Command::new("docker");
+        let mut command = docker_command(docker);
         command.args(["volume", "inspect"]);
         command.args(chunk.iter().map(|usage| usage.name.as_str()));
         let output = command
@@ -131,7 +139,7 @@ fn scan_volumes(expected_count: usize) -> Result<Vec<Candidate>, String> {
         inspected.append(&mut values);
     }
 
-    Ok(build_volume_candidates(&usages, &inspected))
+    Ok(build_volume_candidates(&usages, &inspected, docker))
 }
 
 fn parse_volume_usages(stdout: &str) -> Result<Vec<VolumeUsage>, String> {
@@ -162,19 +170,23 @@ fn parse_volume_usages(stdout: &str) -> Result<Vec<VolumeUsage>, String> {
         .collect()
 }
 
-fn build_volume_candidates(usages: &[VolumeUsage], inspected: &[Value]) -> Vec<Candidate> {
+fn build_volume_candidates(
+    usages: &[VolumeUsage],
+    inspected: &[Value],
+    docker: &Path,
+) -> Vec<Candidate> {
     usages
         .iter()
         .filter_map(|usage| {
             let metadata = inspected
                 .iter()
                 .find(|value| value.get("Name").and_then(Value::as_str) == Some(&usage.name))?;
-            Some(volume_candidate(usage, metadata))
+            Some(volume_candidate(usage, metadata, docker))
         })
         .collect()
 }
 
-fn volume_candidate(usage: &VolumeUsage, metadata: &Value) -> Candidate {
+fn volume_candidate(usage: &VolumeUsage, metadata: &Value, docker: &Path) -> Candidate {
     let project = label(metadata, COMPOSE_PROJECT_LABEL);
     let logical_name = label(metadata, COMPOSE_VOLUME_LABEL);
     let compose_identity = project.zip(logical_name);
@@ -210,6 +222,7 @@ fn volume_candidate(usage: &VolumeUsage, metadata: &Value) -> Candidate {
         scope_root: None,
         source: Source::Docker,
         docker_resource: Some(docker_resource),
+        external_program: Some(docker.to_path_buf()),
         rule_id: if eligible {
             "docker-compose-volume"
         } else {
@@ -230,13 +243,14 @@ fn volume_candidate(usage: &VolumeUsage, metadata: &Value) -> Candidate {
     }
 }
 
-fn protected_summary(kind: &str, bytes: u64) -> Candidate {
+fn protected_summary(kind: &str, bytes: u64, docker: &Path) -> Candidate {
     Candidate {
         id: 0,
         path: None,
         scope_root: None,
         source: Source::Docker,
         docker_resource: None,
+        external_program: Some(docker.to_path_buf()),
         rule_id: "docker-protected-resource",
         category: docker_category(kind),
         bytes,
@@ -281,13 +295,19 @@ fn field(value: &Value, names: &[&str]) -> Option<String> {
 }
 
 pub fn delete(candidate: &Candidate) -> Result<String, String> {
+    let docker = candidate
+        .external_program
+        .as_deref()
+        .ok_or("Docker executable identity is missing; refresh before deleting")?;
     match &candidate.docker_resource {
-        Some(DockerResource::BuildCache) => prune_build_cache(),
+        Some(DockerResource::BuildCache) => prune_build_cache(docker),
         Some(DockerResource::ComposeVolume {
             name,
             project,
             logical_name,
-        }) if candidate.risk == Risk::Review => remove_compose_volume(name, project, logical_name),
+        }) if candidate.risk == Risk::Review => {
+            remove_compose_volume(docker, name, project, logical_name)
+        }
         Some(DockerResource::ComposeVolume { .. } | DockerResource::Volume { .. }) => {
             Err("this Docker volume is protected from deletion".into())
         }
@@ -295,8 +315,13 @@ pub fn delete(candidate: &Candidate) -> Result<String, String> {
     }
 }
 
-fn remove_compose_volume(name: &str, project: &str, logical_name: &str) -> Result<String, String> {
-    let output = Command::new("docker")
+fn remove_compose_volume(
+    docker: &Path,
+    name: &str,
+    project: &str,
+    logical_name: &str,
+) -> Result<String, String> {
+    let output = docker_command(docker)
         .args(["volume", "inspect", name])
         .output()
         .map_err(|error| format!("could not start Docker: {error}"))?;
@@ -315,7 +340,7 @@ fn remove_compose_volume(name: &str, project: &str, logical_name: &str) -> Resul
         return Err("volume identity changed after the scan; refresh before deleting".into());
     }
 
-    let output = Command::new("docker")
+    let output = docker_command(docker)
         .args(["container", "ls", "--all", "--quiet", "--filter"])
         .arg(format!("volume={name}"))
         .output()
@@ -330,7 +355,7 @@ fn remove_compose_volume(name: &str, project: &str, logical_name: &str) -> Resul
         return Err("volume is now referenced by a container; refresh before deleting".into());
     }
 
-    let output = Command::new("docker")
+    let output = docker_command(docker)
         .args(["volume", "rm", name])
         .output()
         .map_err(|error| format!("could not start Docker: {error}"))?;
@@ -341,8 +366,8 @@ fn remove_compose_volume(name: &str, project: &str, logical_name: &str) -> Resul
     }
 }
 
-fn prune_build_cache() -> Result<String, String> {
-    let output = Command::new("docker")
+fn prune_build_cache(docker: &Path) -> Result<String, String> {
+    let output = docker_command(docker)
         .args(["builder", "prune", "--force"])
         .output()
         .map_err(|error| format!("could not start Docker: {error}"))?;
@@ -360,6 +385,14 @@ fn output_error(output: &Output, fallback: &str) -> String {
     } else {
         error
     }
+}
+
+fn docker_command(docker: &Path) -> Command {
+    let mut command = Command::new(docker);
+    if let Some(home) = dirs::home_dir().and_then(|path| path.canonicalize().ok()) {
+        command.current_dir(home);
+    }
+    command
 }
 
 #[cfg(test)]
@@ -409,6 +442,7 @@ mod tests {
                 metadata("current_db", Some("current"), Some("db")),
                 metadata("orphan", None, None),
             ],
+            Path::new("/trusted/docker"),
         );
 
         assert_eq!(candidates[0].risk, Risk::Review);

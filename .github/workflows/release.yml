@@ -23,9 +23,10 @@ jobs:
             artifact: release-windows-x86_64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249
         with:
+          toolchain: 1.97.1
           targets: ${{ matrix.target }}
       - run: cargo test --locked --target ${{ matrix.target }}
       - run: cargo build --locked --release --target ${{ matrix.target }}
@@ -59,7 +60,7 @@ jobs:
           New-Item -ItemType Directory -Force "npm-payload/win32-x64"
           Copy-Item "target/${{ matrix.target }}/release/reclaim.exe" "npm-payload/win32-x64/reclaim.exe"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.artifact }}
           path: |
@@ -68,7 +69,7 @@ jobs:
             reclaim-*.sha256
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: npm-binary-${{ matrix.target }}
           path: npm-payload
@@ -82,13 +83,13 @@ jobs:
       contents: write
       id-token: write
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           pattern: release-*
           path: dist
           merge-multiple: true
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           pattern: npm-binary-*
           path: npm/vendor
@@ -98,7 +99,7 @@ jobs:
         run: |
           chmod +x npm/vendor/linux-x64/reclaim
           test -f npm/vendor/win32-x64/reclaim.exe
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org

@@ -1,9 +1,9 @@
 use crate::model::{Candidate, Risk, ScanWarnings, Source};
+use crate::process;
 use crate::scanner::{fingerprint, tree_size};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 struct CacheSpec {
     path: PathBuf,
@@ -14,7 +14,7 @@ struct CacheSpec {
     restore: &'static str,
 }
 
-pub fn scan() -> (Vec<Candidate>, ScanWarnings) {
+pub fn scan(excluded_roots: &[PathBuf]) -> (Vec<Candidate>, ScanWarnings) {
     let mut warnings = ScanWarnings::default();
     let Some(home) = dirs::home_dir().and_then(|p| p.canonicalize().ok()) else {
         warnings
@@ -28,58 +28,52 @@ pub fn scan() -> (Vec<Candidate>, ScanWarnings) {
         &home,
         "go",
         &["env", "GOCACHE"],
-        "go-build-cache",
-        "Go build cache",
-        "go clean -cache",
+        ("go-build-cache", "Go build cache", "go clean -cache"),
+        excluded_roots,
     );
     add_tool_path(
         &mut specs,
         &home,
         "go",
         &["env", "GOMODCACHE"],
-        "go-module-cache",
-        "Go module cache",
-        "go mod download",
+        ("go-module-cache", "Go module cache", "go mod download"),
+        excluded_roots,
     );
     add_tool_path(
         &mut specs,
         &home,
         "pnpm",
         &["store", "path"],
-        "pnpm-store",
-        "pnpm package store",
-        "pnpm install",
+        ("pnpm-store", "pnpm package store", "pnpm install"),
+        excluded_roots,
     );
 
     let mut seen = HashSet::new();
     let mut candidates = Vec::new();
     for spec in specs {
+        let Ok(metadata) = fs::symlink_metadata(&spec.path) else {
+            continue;
+        };
+        if path_contains_link(&home, &spec.path) {
+            candidates.push(protected_cache(
+                spec,
+                metadata,
+                "Global cache path contains a symlink or reparse point",
+            ));
+            continue;
+        }
         let Ok(path) = spec.path.canonicalize() else {
             continue;
         };
-        if !path.starts_with(&home) || !seen.insert(path.clone()) {
+        if path == home || !path.starts_with(&home) {
+            candidates.push(protected_cache(
+                spec,
+                metadata,
+                "Global cache path resolves outside its permitted home subdirectory",
+            ));
             continue;
         }
-        let Ok(metadata) = fs::symlink_metadata(&path) else {
-            continue;
-        };
-        if crate::scanner::is_link_like(&metadata) {
-            candidates.push(Candidate {
-                id: 0,
-                path: Some(path.clone()),
-                scope_root: Some(path),
-                source: Source::Global,
-                docker_resource: None,
-                rule_id: spec.rule_id,
-                category: spec.category,
-                bytes: 0,
-                files: 0,
-                risk: Risk::Protected,
-                reason: "Global cache path is a symlink or reparse point".into(),
-                restore: spec.restore.into(),
-                fingerprint: Some(fingerprint(&metadata)),
-                selected: false,
-            });
+        if !seen.insert(path.clone()) {
             continue;
         }
         let (bytes, files, local_warnings) = tree_size(&path);
@@ -90,6 +84,7 @@ pub fn scan() -> (Vec<Candidate>, ScanWarnings) {
             scope_root: Some(path),
             source: Source::Global,
             docker_resource: None,
+            external_program: None,
             rule_id: spec.rule_id,
             category: spec.category,
             bytes,
@@ -102,6 +97,46 @@ pub fn scan() -> (Vec<Candidate>, ScanWarnings) {
         });
     }
     (candidates, warnings)
+}
+
+fn protected_cache(spec: CacheSpec, metadata: fs::Metadata, reason: &str) -> Candidate {
+    Candidate {
+        id: 0,
+        path: Some(spec.path.clone()),
+        scope_root: Some(spec.path),
+        source: Source::Global,
+        docker_resource: None,
+        external_program: None,
+        rule_id: spec.rule_id,
+        category: spec.category,
+        bytes: 0,
+        files: 0,
+        risk: Risk::Protected,
+        reason: reason.into(),
+        restore: spec.restore.into(),
+        fingerprint: Some(fingerprint(&metadata)),
+        selected: false,
+    }
+}
+
+fn path_contains_link(home: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(home) else {
+        return true;
+    };
+    let mut current = home.to_path_buf();
+    for component in relative.components() {
+        if !matches!(component, std::path::Component::Normal(_)) {
+            return true;
+        }
+        current.push(component);
+        let Ok(metadata) = fs::symlink_metadata(&current) else {
+            return true;
+        };
+        if crate::scanner::is_link_like(&metadata) {
+            return true;
+        }
+    }
+    false
 }
 
 fn safe(path: PathBuf, id: &'static str, reason: &'static str, restore: &'static str) -> CacheSpec {
@@ -206,11 +241,13 @@ fn add_tool_path(
     home: &Path,
     program: &str,
     args: &[&str],
-    id: &'static str,
-    reason: &'static str,
-    restore: &'static str,
+    cache: (&'static str, &'static str, &'static str),
+    excluded_roots: &[PathBuf],
 ) {
-    let Ok(output) = Command::new(program).args(args).output() else {
+    let Ok(mut command) = process::trusted_command(program, excluded_roots) else {
+        return;
+    };
+    let Ok(output) = command.current_dir(home).args(args).output() else {
         return;
     };
     if !output.status.success() {
@@ -219,6 +256,30 @@ fn add_tool_path(
     let value = String::from_utf8_lossy(&output.stdout);
     let path = PathBuf::from(value.trim());
     if path.is_absolute() && path.starts_with(home) {
-        specs.push(safe(path, id, reason, restore));
+        specs.push(safe(path, cache.0, cache.1, cache.2));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn detects_a_symlink_in_a_cache_path() {
+        use std::os::unix::fs::symlink;
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let home = std::env::temp_dir().join(format!("reclaim-global-test-{nonce}"));
+        let target = home.join("documents");
+        fs::create_dir_all(home.join(".npm")).unwrap();
+        fs::create_dir(&target).unwrap();
+        symlink(&target, home.join(".npm/_cacache")).unwrap();
+
+        assert!(path_contains_link(&home, &home.join(".npm/_cacache")));
+        let _ = fs::remove_dir_all(home);
     }
 }

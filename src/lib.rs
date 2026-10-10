@@ -3,6 +3,7 @@ pub mod docker;
 pub mod format;
 pub mod global;
 pub mod model;
+pub mod process;
 pub mod rules;
 pub mod scanner;
 pub mod tui;

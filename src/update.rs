@@ -1,18 +1,18 @@
+use crate::process;
 use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
 const PACKAGE: &str = "@alifnrhman/reclaim";
 const CACHE_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
-pub fn check_async() -> Receiver<Option<String>> {
+pub fn check_async(excluded_roots: Vec<PathBuf>) -> Receiver<Option<String>> {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let latest = fresh_cached_version().or_else(|| {
-            let version = fetch_latest_version()?;
+            let version = fetch_latest_version(&excluded_roots)?;
             write_cached_version(&version);
             Some(version)
         });
@@ -24,8 +24,18 @@ pub fn check_async() -> Receiver<Option<String>> {
 
 pub fn install_latest() -> Result<()> {
     println!("Updating {PACKAGE}…");
-    let status = Command::new(npm_program())
-        .args(["install", "--global", "@alifnrhman/reclaim@latest"])
+    let excluded = std::env::current_dir().into_iter().collect::<Vec<_>>();
+    let mut command = process::trusted_command(npm_program(), &excluded)
+        .map_err(anyhow::Error::msg)
+        .context("could not locate a trusted npm executable")?;
+    let status = command
+        .current_dir(trusted_working_directory())
+        .args([
+            "install",
+            "--global",
+            "@alifnrhman/reclaim@latest",
+            "--registry=https://registry.npmjs.org",
+        ])
         .status()
         .context(
             "could not start npm; install Node.js/npm or update the standalone binary manually",
@@ -37,9 +47,17 @@ pub fn install_latest() -> Result<()> {
     Ok(())
 }
 
-fn fetch_latest_version() -> Option<String> {
-    let output = Command::new(npm_program())
-        .args(["view", PACKAGE, "version", "--json"])
+fn fetch_latest_version(excluded_roots: &[PathBuf]) -> Option<String> {
+    let mut command = process::trusted_command(npm_program(), excluded_roots).ok()?;
+    let output = command
+        .current_dir(trusted_working_directory())
+        .args([
+            "view",
+            PACKAGE,
+            "version",
+            "--json",
+            "--registry=https://registry.npmjs.org",
+        ])
         .env("npm_config_fetch_retries", "0")
         .env("npm_config_fetch_timeout", "1500")
         .output()
@@ -74,6 +92,12 @@ fn write_cached_version(version: &str) {
 
 fn cache_path() -> Option<PathBuf> {
     Some(dirs::cache_dir()?.join("reclaim").join("latest-version"))
+}
+
+fn trusted_working_directory() -> PathBuf {
+    dirs::home_dir()
+        .and_then(|path| path.canonicalize().ok())
+        .unwrap_or_else(std::env::temp_dir)
 }
 
 fn is_newer(current: &str, latest: &str) -> bool {

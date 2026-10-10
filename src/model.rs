@@ -62,6 +62,7 @@ pub struct Candidate {
     pub scope_root: Option<PathBuf>,
     pub source: Source,
     pub docker_resource: Option<DockerResource>,
+    pub external_program: Option<PathBuf>,
     pub rule_id: &'static str,
     pub category: &'static str,
     pub bytes: u64,

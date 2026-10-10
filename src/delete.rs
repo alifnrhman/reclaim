@@ -113,46 +113,13 @@ fn safe_remove(path: &Path) -> std::io::Result<()> {
         return Err(std::io::Error::other("refusing to delete a link-like path"));
     }
     if !metadata.is_dir() {
-        clear_readonly(path, &metadata)?;
         return fs::remove_file(path);
     }
-    for entry in fs::read_dir(path)? {
-        let child = entry?.path();
-        let child_meta = fs::symlink_metadata(&child)?;
-        if is_link_like(&child_meta) {
-            if child_meta.is_dir() {
-                fs::remove_dir(&child)?;
-            } else {
-                clear_readonly(&child, &child_meta)?;
-                fs::remove_file(&child)?;
-            }
-        } else if child_meta.is_dir() {
-            safe_remove(&child)?;
-        } else {
-            clear_readonly(&child, &child_meta)?;
-            fs::remove_file(&child)?;
-        }
-    }
-    clear_readonly(path, &metadata)?;
-    fs::remove_dir(path)
-}
-
-#[cfg(windows)]
-#[allow(clippy::permissions_set_readonly_false)]
-fn clear_readonly(path: &Path, metadata: &fs::Metadata) -> std::io::Result<()> {
-    let mut permissions = metadata.permissions();
-    if permissions.readonly() {
-        // On Windows this toggles the FILE_ATTRIBUTE_READONLY flag; it does
-        // not broaden Unix mode bits because this function is Windows-only.
-        permissions.set_readonly(false);
-        fs::set_permissions(path, permissions)?;
-    }
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn clear_readonly(_path: &Path, _metadata: &fs::Metadata) -> std::io::Result<()> {
-    Ok(())
+    // On the supported Unix and Windows targets, the standard library uses
+    // descriptor/handle-relative traversal here (openat/unlinkat on Unix and
+    // handle-based APIs on Windows), protecting each child operation against
+    // symlink TOCTOU replacement.
+    fs::remove_dir_all(path)
 }
 
 #[cfg(test)]
@@ -217,5 +184,26 @@ mod tests {
         let reports = delete_selected(&scan.candidates);
         assert!(reports[0].result.is_err());
         assert!(temp.0.join("target").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deleting_a_tree_never_follows_an_inner_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TestDir::new();
+        let outside = TestDir::new();
+        fs::write(outside.0.join("keep"), "important").unwrap();
+        let target = temp.0.join("target");
+        fs::create_dir(&target).unwrap();
+        symlink(&outside.0, target.join("outside-link")).unwrap();
+
+        safe_remove(&target).unwrap();
+
+        assert!(!target.exists());
+        assert_eq!(
+            fs::read_to_string(outside.0.join("keep")).unwrap(),
+            "important"
+        );
     }
 }

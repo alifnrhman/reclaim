@@ -432,7 +432,8 @@ fn draw(app: &App) -> Result<()> {
             // four-cell right margin so no terminal can auto-wrap the row and
             // silently double its height.
             let path_width = width.saturating_sub(45);
-            let path = truncate_middle(&candidate.display_path(), path_width);
+            let path = sanitize_terminal(&candidate.display_path());
+            let path = truncate_middle(&path, path_width);
             output.push_str(&format!(
                 "{prefix}  {pointer} {color}{selected}{RESET}{prefix} {:>10}  {color}{:<9}{RESET}{prefix}  {:<10}  {}{RESET}\x1b[K\n",
                 format::bytes(candidate.bytes),
@@ -448,14 +449,21 @@ fn draw(app: &App) -> Result<()> {
         let candidate = &app.candidates[*index];
         output.push_str(&format!(
             "  {}\n  {DIM}{}{RESET}\n",
-            truncate(&candidate.reason, width.saturating_sub(4)),
-            truncate(&candidate.restore, width.saturating_sub(4))
+            truncate(
+                &sanitize_terminal(&candidate.reason),
+                width.saturating_sub(4)
+            ),
+            truncate(
+                &sanitize_terminal(&candidate.restore),
+                width.saturating_sub(4)
+            )
         ));
     }
 
     if let Some(progress) = &app.deleting {
         let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][progress.frame % 10];
-        let path = truncate(&progress.path, width.saturating_sub(8));
+        let path = sanitize_terminal(&progress.path);
+        let path = truncate(&path, width.saturating_sub(8));
         output.push_str(&format!(
             "\n  {CYAN}{BOLD}{spinner} Deleting {}/{}{RESET}  {}\n  {DIM}Please wait. Do not close this terminal.{RESET}",
             progress.current, progress.total, path
@@ -473,7 +481,8 @@ fn draw(app: &App) -> Result<()> {
             width.saturating_sub(4),
         );
         let status = if !app.message.is_empty() {
-            format!("  {}\n", truncate(&app.message, width.saturating_sub(4)))
+            let message = sanitize_terminal(&app.message);
+            format!("  {}\n", truncate(&message, width.saturating_sub(4)))
         } else if !app.warnings.0.is_empty() {
             format!(
                 "  {YELLOW}{} scan warning(s) · w to view{RESET}\n",
@@ -532,6 +541,30 @@ fn truncate_middle(value: &str, width: usize) -> String {
     let start: String = value.chars().take(left).collect();
     let end: String = value.chars().skip(count - right).collect();
     format!("{start}…{end}")
+}
+
+fn sanitize_terminal(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_control() || is_bidi_control(character) {
+                '�'
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
+fn is_bidi_control(character: char) -> bool {
+    matches!(
+        character,
+        '\u{061c}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}'
+    )
 }
 
 #[cfg(unix)]
@@ -737,6 +770,14 @@ mod tests {
     fn truncates_long_paths_from_the_middle() {
         assert_eq!(truncate_middle("/one/two/three/four", 11), "/one/…/four");
         assert_eq!(truncate_middle("short", 20), "short");
+    }
+
+    #[test]
+    fn removes_terminal_and_bidi_controls_from_untrusted_text() {
+        assert_eq!(
+            sanitize_terminal("safe\x1b]52;c;secret\x07\u{202e}txt"),
+            "safe�]52;c;secret��txt"
+        );
     }
 
     #[cfg(unix)]

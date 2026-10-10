@@ -26,7 +26,7 @@ fn main() -> Result<()> {
         bail!("reclaim requires an interactive terminal");
     }
 
-    let update_check = reclaim::update::check_async();
+    let update_check = reclaim::update::check_async(cli.paths.clone());
     scan_status("projects")?;
     let project = reclaim::scanner::scan_projects(&cli.paths)?;
     let mut candidates = project.candidates;
@@ -34,13 +34,13 @@ fn main() -> Result<()> {
 
     if !cli.no_global {
         scan_status("global caches")?;
-        let (global, global_warnings) = reclaim::global::scan();
+        let (global, global_warnings) = reclaim::global::scan(&cli.paths);
         candidates.extend(global);
         warnings.0.extend(global_warnings.0);
     }
     if !cli.no_docker {
         scan_status("Docker")?;
-        let (docker, docker_warnings) = reclaim::docker::scan();
+        let (docker, docker_warnings) = reclaim::docker::scan(&cli.paths);
         candidates.extend(docker);
         warnings.0.extend(docker_warnings.0);
     }
